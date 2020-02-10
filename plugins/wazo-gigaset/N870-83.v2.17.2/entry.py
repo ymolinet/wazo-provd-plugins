@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # Copyright 2017-2020 The Wazo Authors  (see the AUTHORS file)
-# SPDX-License-Identifier: GPL-3.0+
+# SPDX-License-Identifier: GPL-3.0-or-later
 
 common = {}
 execfile_('common.py', common)
 
 
 MODEL_VERSIONS = {
-    u'N510 IP PRO': u'42.250.00.000.000',
+    u'N870 IP PRO': u'83.V2.17.2',
 }
 
 
