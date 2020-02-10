@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 # Copyright 2010-2020 The Wazo Authors  (see the AUTHORS file)
-# SPDX-License-Identifier: GPL-3.0-or-later
+# SPDX-License-Identifier: GPL-3.0+
 
 import logging
 import os.path
@@ -26,25 +26,20 @@ logger = logging.getLogger('plugin.xivo-snom')
 
 class BaseSnomHTTPDeviceInfoExtractor(object):
     _UA_REGEX = re.compile(r'\bsnom(\w+)-SIP ([\d.]+)')
-    _UA_REGEX_MAC = re.compile(r'\bsnom(\w+)-SIP\s([\d.]+)\s(.+)\s(?P<mac>[0-9A-F]+)')
+    _UA_REGEX_MAC = re.compile(r'\bsnom(\w+)-SIP\s([\d.]+)\s(?:.+)\s(?P<mac>[0-9A-F]+)')
     _PATH_REGEX = re.compile(r'\bsnom\w+-([\dA-F]{12})\.htm$')
 
     def extract(self, request, request_type):
         return defer.succeed(self._do_extract(request))
 
     def _do_extract(self, request):
-        device_info = {}
         ua = request.getHeader('User-Agent')
-        raw_mac = request.args.get('mac', [None])[0]
-        if raw_mac:
-            logger.debug('Got MAC from URL: %s', raw_mac)
-            device_info[u'mac'] = norm_mac(raw_mac.decode('ascii'))
         if ua:
-            info_from_ua = self._extract_from_ua(ua)
-            if info_from_ua:
-                device_info.update(info_from_ua)
-                self._extract_from_path(request.path, device_info)
-        return device_info
+            dev_info = self._extract_from_ua(ua)
+            if dev_info:
+                self._extract_from_path(request.path, dev_info)
+                return dev_info
+        return None
 
     def _extract_from_ua(self, ua):
         # HTTP User-Agent:
@@ -61,7 +56,7 @@ class BaseSnomHTTPDeviceInfoExtractor(object):
         #   "Mozilla/4.0 (compatible; snomD785-SIP 10.1.33.33 2010.12-00004-g9ba52f5 000413922D24 SXM:0 UXM:0)"
         m = self._UA_REGEX_MAC.search(ua)
         if m:
-            raw_model, raw_version, _, raw_mac = m.groups()
+            raw_model, raw_version, raw_mac = m.groups()
             return {u'vendor': u'Snom',
                     u'model': raw_model.decode('ascii'),
                     u'mac': norm_mac(raw_mac.decode('ascii')),
@@ -116,12 +111,15 @@ class BaseSnomPlugin(StandardPlugin):
     _ENCODING = 'UTF-8'
     _LOCALE = {
         u'de_DE': (u'Deutsch', u'GER'),
+        u'en_GB': (u'English', u'GBR'),
         u'en_US': (u'English', u'USA'),
-        u'es_ES': (u'Espanol', u'ESP'),
-        u'fr_FR': (u'Francais', u'FRA'),
-        u'fr_CA': (u'Francais', u'USA'),
+        u'es_ES': (u'Español', u'ESP'),
+        u'fr_FR': (u'Français', u'FRA'),
+        u'fr_CA': (u'Français', u'USA'),
         u'it_IT': (u'Italiano', u'ITA'),
         u'nl_NL': (u'Dutch', u'NLD'),
+        u'ja_JP': (u'Japanese', u'JPN'),
+        u'sv_SE': (u'Svenska', u'SWE'),
     }
     _SIP_DTMF_MODE = {
         u'RTP-in-band': u'off',
@@ -135,6 +133,24 @@ class BaseSnomPlugin(StandardPlugin):
         },
         u'fr': {
             u'remote_directory': u'Annuaire',
+        },
+        u'es': {
+            u'remote_directory': u'Directorio',
+        },
+        u'it': {
+            u'remote_directory': u'Elenco',
+        },
+        u'jp': {
+            u'remote_directory': u'電話帳',
+        },
+        u'de': {
+            u'remote_directory': u'Telefonbuch',
+        },
+        u'nl': {
+            u'remote_directory': u'Telefoonboek',
+        },
+        u'sv': {
+            u'remote_directory': u'Telefonkatalog',
         },
     }
 
@@ -181,7 +197,7 @@ class BaseSnomPlugin(StandardPlugin):
                 line.setdefault(u'voicemail', voicemail)
 
     def _add_fkeys(self, raw_config, model):
-        lines = []
+        fkeys = []
         for funckey_no, funckey_dict in sorted(raw_config[u'funckeys'].iteritems(),
                                                key=itemgetter(0)):
             funckey_type = funckey_dict[u'type']
@@ -189,30 +205,30 @@ class BaseSnomPlugin(StandardPlugin):
                 type_ = u'speed'
                 suffix = ''
             elif funckey_type == u'park':
-                if model in [u'710', u'715', u'720', u'725', u'760', u'D765']:
-                    type_ = u'orbit'
-                    suffix = ''
-                else:
-                    type_ = u'speed'
-                    suffix = ''
+                type_ = u'orbit'
+                suffix = ''
             elif funckey_type == u'blf':
                 exten_pickup_call = raw_config.get(u'exten_pickup_call')
                 if exten_pickup_call:
                     type_ = u'blf'
                     suffix = '|%s' % exten_pickup_call
                 else:
-                    logger.warning('Could not set funckey %s: no exten_pickup_call',
-                                   funckey_no)
+                    logger.warning('Could not set funckey %s: no exten_pickup_call', funckey_no)
                     continue
             else:
                 logger.info('Unsupported funckey type: %s', funckey_type)
                 continue
             value = funckey_dict[u'value']
             label = escape(funckey_dict.get(u'label') or value)
+            short_label = label
             fkey_value = self._format_fkey_value(type_, value, suffix)
-            lines.append(u'<fkey idx="%d" label="%s" context="active" perm="R">%s</fkey>' %
-                         (int(funckey_no) - 1, label, fkey_value))
-        raw_config[u'XX_fkeys'] = u'\n'.join(lines)
+            fkeys.append({
+                u'idx': int(funckey_no) - 1,
+                u'label': label,
+                u'short_label': short_label,
+                u'value': fkey_value
+            })
+        raw_config[u'XX_fkeys'] = fkeys
 
     def _format_fkey_value(self, fkey_type, value, suffix):
         return '%s %s%s' % (fkey_type, value, suffix)
@@ -233,17 +249,16 @@ class BaseSnomPlugin(StandardPlugin):
             return u'%02d.%02d.%02d %s' % (dst_change['month'], week, weekday, fmted_time)
 
     def _format_tzinfo(self, tzinfo):
-        lines = []
-        lines.append(u'<timezone perm="R"></timezone>')
-        lines.append(u'<utc_offset perm="R">%+d</utc_offset>' % tzinfo['utcoffset'].as_seconds)
-        if tzinfo['dst'] is None:
-            lines.append(u'<dst perm="R"></dst>')
-        else:
-            lines.append(u'<dst perm="R">%d %s %s</dst>' %
-                         (tzinfo['dst']['save'].as_seconds,
-                          self._format_dst_change(tzinfo['dst']['start']),
-                          self._format_dst_change(tzinfo['dst']['end'])))
-        return u'\n'.join(lines)
+        timezone = {}
+        timezone['utc_offset'] = u'%+d' % tzinfo['utcoffset'].as_seconds
+        timezone['dst'] = ''
+        if tzinfo['dst']:
+            timezone['dst'] = u'%d %s %s' % (
+                tzinfo['dst']['save'].as_seconds,
+                self._format_dst_change(tzinfo['dst']['start']),
+                self._format_dst_change(tzinfo['dst']['end'])
+            )
+        return timezone
 
     def _add_timezone(self, raw_config):
         timezone = raw_config.get(u'timezone')
@@ -272,6 +287,8 @@ class BaseSnomPlugin(StandardPlugin):
     def _add_xivo_phonebook_url(self, raw_config):
         if hasattr(plugins, 'add_xivo_phonebook_url') and raw_config.get(u'config_version', 0) >= 1:
             plugins.add_xivo_phonebook_url(raw_config, u'snom')
+            phonebook_url = raw_config[u'XX_xivo_phonebook_url'].replace(u' ', u'%20')
+            raw_config[u'XX_xivo_phonebook_url'] = phonebook_url
         else:
             self._add_xivo_phonebook_url_compat(raw_config)
 
